@@ -21,7 +21,7 @@ class Cheerio_DocumentLoaders implements INode {
     constructor() {
         this.label = 'Cheerio Web Scraper'
         this.name = 'cheerioWebScraper'
-        this.version = 1.1
+        this.version = 1.2
         this.type = 'Document'
         this.icon = 'cheerio.svg'
         this.category = 'Document Loaders'
@@ -136,13 +136,37 @@ class Cheerio_DocumentLoaders implements INode {
                     if (process.env.DEBUG === 'true') options.logger.info(`CheerioWebBaseLoader does not support PDF files: ${url}`)
                     return docs
                 }
-                const loader = new CheerioWebBaseLoader(url, params)
-                if (textSplitter) {
-                    docs = await loader.load()
-                    docs = await textSplitter.splitDocuments(docs)
-                } else {
-                    docs = await loader.load()
-                }
+
+                const loader = new CheerioWebBaseLoader(url)
+
+                // scrape the whole page
+                const $ = await loader.scrape()
+
+                // get the content of the selector if provided, otherwise get the entire body text
+                const content = params['selector'] ? $(params['selector']).text() : $('body').text()
+
+                // select the meta tag with property="og:title" and get the content attribute
+                const ogTitle = $("meta[property='og:title']")?.attr('content')
+                // if og:title is not present, use the page title node
+                const title = ogTitle ? ogTitle : $('title').text()
+
+                if (process.env.DEBUG === 'true') options.logger.info(`title: ${title}, url: ${url}`)
+                // TODO: think about allowing user to specify the page meta(data) key:value pairs to extract (or omit?)
+
+                // create the initial document object
+                docs = [
+                    {
+                        pageContent: content,
+                        metadata: {
+                            source: url,
+                            title: title
+                        }
+                    }
+                ]
+
+                // split into chunks if a text splitter is specified
+                if (textSplitter) docs = await textSplitter.splitDocuments(docs)
+
                 return docs
             } catch (err) {
                 if (process.env.DEBUG === 'true') options.logger.error(`error in CheerioWebBaseLoader: ${err.message}, on page: ${url}`)
