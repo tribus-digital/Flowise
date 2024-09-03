@@ -134,12 +134,19 @@ class Cheerio_DocumentLoaders implements INode {
 
         const isDebug = process.env.DEBUG === 'true'
         let errorURLs: Map<string, integer> = new Map()
+        let processedURLs: Set<string> = new Set()
 
         const selector: SelectorType = nodeData.inputs?.selector as SelectorType
         if (selector) parse(selector) // will throw error if invalid
 
         async function cheerioLoader(url: string): Promise<IDocument[]> {
             try {
+                if (processedURLs.has(url)) {
+                    if (isDebug) options.logger.info(`URL already processed: ${url}`)
+                    return [] as IDocument[]
+                }
+                processedURLs.add(url)
+
                 if (url.endsWith('.pdf')) {
                     if (isDebug) options.logger.info(`Cheerio does not support PDF files: ${url}`)
                     return [] as IDocument[]
@@ -190,7 +197,7 @@ class Cheerio_DocumentLoaders implements INode {
 
                 return docs
             } catch (err) {
-                if (isDebug) options.logger.error(`error in CheerioWebBaseLoader: ${err.message}, on page: ${url}`)
+                if (isDebug) options.logger.error(`error in cheerioLoader: ${err.message}, on page: ${url}`)
                 return [] as IDocument[]
             }
         }
@@ -289,7 +296,9 @@ class Cheerio_DocumentLoaders implements INode {
 
         if (isDebug) {
             options.logger.info(`Scrape completed`)
-            options.logger.info(`Total error responses: ${errorURLs.size}`)
+            options.logger.info(`Generated ${docs.length} total documents`)
+            options.logger.info(`Processed ${processedURLs.size} unique URLs`)
+            options.logger.info(`Encountered ${errorURLs.size} error responses...`)
             for (const item of errorURLs) options.logger.info(`URL: ${item[0]}, status: ${item[1]}`)
         }
 
