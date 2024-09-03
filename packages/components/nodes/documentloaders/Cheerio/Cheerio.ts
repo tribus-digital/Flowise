@@ -138,7 +138,7 @@ class Cheerio_DocumentLoaders implements INode {
         const selector: SelectorType = nodeData.inputs?.selector as SelectorType
         if (selector) parse(selector) // will throw error if invalid
 
-        async function cheerioLoader(url: string): Promise<any> {
+        async function cheerioLoader(url: string): Promise<IDocument[]> {
             try {
                 if (url.endsWith('.pdf')) {
                     if (isDebug) options.logger.info(`Cheerio does not support PDF files: ${url}`)
@@ -191,7 +191,7 @@ class Cheerio_DocumentLoaders implements INode {
                 return docs
             } catch (err) {
                 if (isDebug) options.logger.error(`error in CheerioWebBaseLoader: ${err.message}, on page: ${url}`)
-                return []
+                return [] as IDocument[]
             }
         }
 
@@ -199,61 +199,92 @@ class Cheerio_DocumentLoaders implements INode {
 
         if (relativeLinksMethod) {
             if (isDebug) options.logger.info(`Start ${relativeLinksMethod}`)
-            // if limit is 0 we don't want it to default to 10 so we check explicitly for null or undefined
-            // so when limit is 0 we can fetch all the links
-            if (limit === null || limit === undefined) limit = 10
-            else if (limit < 0) throw new Error('Limit cannot be less than 0')
-            const pages: string[] =
-                selectedLinks && selectedLinks.length > 0
-                    ? selectedLinks.slice(0, limit === 0 ? undefined : limit)
-                    : relativeLinksMethod === 'webCrawl'
-                    ? await webCrawl(url, limit)
-                    : await xmlScrape(url, limit)
-            if (isDebug) options.logger.info(`pages: ${JSON.stringify(pages)}, length: ${pages.length}`)
-            if (!pages || pages.length === 0) throw new Error('No relative links found')
-            for (const page of pages) {
-                docs.push(...(await cheerioLoader(page)))
+
+            // Determine the limit for fetching links.
+            // If limit is explicitly set to null or undefined, default to 10.
+            // If limit is 0, fetch all links.
+            if (limit === null || limit === undefined) {
+                limit = 10
+            } else if (limit < 0) {
+                throw new Error('Limit cannot be less than 0')
             }
+
+            // Determine pages to process based on selectedLinks and relativeLinksMethod.
+            let pages: string[]
+            if (selectedLinks && selectedLinks.length > 0) {
+                // If specific links are selected, use them up to the specified limit.
+                pages = selectedLinks.slice(0, limit === 0 ? undefined : limit)
+            } else if (relativeLinksMethod === 'webCrawl') {
+                // If 'webCrawl' method is selected, fetch pages using web crawling.
+                pages = await webCrawl(url, limit)
+            } else {
+                // Otherwise, fetch pages using XML scraping.
+                pages = await xmlScrape(url, limit)
+            }
+
+            if (isDebug) options.logger.info(`pages: ${JSON.stringify(pages)}, length: ${pages.length}`)
+
+            // If no pages were found, throw an error.
+            if (!pages || pages.length === 0) {
+                throw new Error('No relative links found')
+            }
+
+            // Process each page to extract content using cheerioLoader.
+            for (const page of pages) {
+                const loadedDocs = await cheerioLoader(page)
+                docs.push(...loadedDocs)
+            }
+
             if (isDebug) options.logger.info(`Finish ${relativeLinksMethod}`)
         } else if (selectedLinks && selectedLinks.length > 0) {
+            // If no relativeLinksMethod but selectedLinks are provided, process them.
             if (isDebug) options.logger.info(`pages: ${JSON.stringify(selectedLinks)}, length: ${selectedLinks.length}`)
+
+            // Process each selected link up to the specified limit.
             for (const page of selectedLinks.slice(0, limit)) {
-                docs.push(...(await cheerioLoader(page)))
+                const loadedDocs = await cheerioLoader(page)
+                docs.push(...loadedDocs)
             }
         } else {
+            // If neither relativeLinksMethod nor selectedLinks are provided, load from the base URL.
             docs = await cheerioLoader(url)
         }
 
+        // If metadata is provided, update the metadata for each document.
         if (metadata) {
+            // Parse metadata if it's a string; otherwise, use it directly.
             const parsedMetadata = typeof metadata === 'object' ? metadata : JSON.parse(metadata)
-            docs = docs.map((doc) => ({
-                ...doc,
-                metadata:
+
+            // Update each document's metadata.
+            docs = docs.map((doc) => {
+                const combinedMetadata = {
+                    ...doc.metadata,
+                    ...parsedMetadata
+                }
+
+                const updatedMetadata =
                     _omitMetadataKeys === '*'
-                        ? {
-                              ...parsedMetadata
-                          }
-                        : omit(
-                              {
-                                  ...doc.metadata,
-                                  ...parsedMetadata
-                              },
-                              omitMetadataKeys
-                          )
-            }))
+                        ? { ...parsedMetadata } // Use only parsedMetadata if omitting all keys.
+                        : omit(combinedMetadata, omitMetadataKeys) // Omit specific keys from the combined metadata.
+
+                return {
+                    ...doc,
+                    metadata: updatedMetadata
+                }
+            })
         } else {
-            docs = docs.map((doc) => ({
-                ...doc,
-                metadata:
+            // No additional metadata provided; only omit specified keys from existing metadata.
+            docs = docs.map((doc) => {
+                const updatedMetadata =
                     _omitMetadataKeys === '*'
-                        ? {}
-                        : omit(
-                              {
-                                  ...doc.metadata
-                              },
-                              omitMetadataKeys
-                          )
-            }))
+                        ? {} // If omitting all keys, set metadata to an empty object.
+                        : omit(doc.metadata, omitMetadataKeys) // Omit specific keys from the existing metadata.
+
+                return {
+                    ...doc,
+                    metadata: updatedMetadata
+                }
+            })
         }
 
         if (isDebug) {
