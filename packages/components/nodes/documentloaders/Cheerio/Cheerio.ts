@@ -1,11 +1,12 @@
 import { TextSplitter } from 'langchain/text_splitter'
 import { omit } from 'lodash'
-import { CheerioWebBaseLoader, WebBaseLoaderParams } from '@langchain/community/document_loaders/web/cheerio'
 import { test } from 'linkifyjs'
 import { parse } from 'css-what'
+import { load, SelectorType } from 'cheerio'
 import { webCrawl, xmlScrape } from '../../../src'
-import { SelectorType } from 'cheerio'
+
 import { ICommonObject, IDocument, INode, INodeData, INodeParams } from '../../../src/Interface'
+import { integer } from '@opensearch-project/opensearch/api/types'
 
 class Cheerio_DocumentLoaders implements INode {
     label: string
@@ -21,7 +22,7 @@ class Cheerio_DocumentLoaders implements INode {
     constructor() {
         this.label = 'Cheerio Web Scraper'
         this.name = 'cheerioWebScraper'
-        this.version = 1.2
+        this.version = 1.3
         this.type = 'Document'
         this.icon = 'cheerio.svg'
         this.category = 'Document Loaders'
@@ -97,6 +98,15 @@ class Cheerio_DocumentLoaders implements INode {
                 placeholder: 'key1, key2, key3.nestedKey1',
                 optional: true,
                 additionalParams: true
+            },
+            {
+                label: 'Reject Error Responses',
+                description: 'Reject documents with error status codes (4xx, 5xx) from the output',
+                name: 'rejectErrorStatuses',
+                type: 'boolean',
+                default: true,
+                optional: true,
+                additionalParams: true
             }
         ]
     }
@@ -106,6 +116,7 @@ class Cheerio_DocumentLoaders implements INode {
         const metadata = nodeData.inputs?.metadata
         const relativeLinksMethod = nodeData.inputs?.relativeLinksMethod as string
         const selectedLinks = nodeData.inputs?.selectedLinks as string[]
+        const rejectErrorStatuses = nodeData.inputs?.rejectErrorStatuses as boolean
         let limit = parseInt(nodeData.inputs?.limit as string)
 
         const _omitMetadataKeys = nodeData.inputs?.omitMetadataKeys as string
@@ -121,40 +132,50 @@ class Cheerio_DocumentLoaders implements INode {
             throw new Error('Invalid URL')
         }
 
-        const selector: SelectorType = nodeData.inputs?.selector as SelectorType
+        const isDebug = process.env.DEBUG === 'true'
+        let errorURLs: Map<string, integer> = new Map()
 
-        let params: WebBaseLoaderParams = {}
-        if (selector) {
-            parse(selector) // comes with cheerio - will throw error if invalid
-            params['selector'] = selector
-        }
+        const selector: SelectorType = nodeData.inputs?.selector as SelectorType
+        if (selector) parse(selector) // will throw error if invalid
 
         async function cheerioLoader(url: string): Promise<any> {
             try {
-                let docs: IDocument[] = []
                 if (url.endsWith('.pdf')) {
-                    if (process.env.DEBUG === 'true') options.logger.info(`CheerioWebBaseLoader does not support PDF files: ${url}`)
-                    return docs
+                    if (isDebug) options.logger.info(`Cheerio does not support PDF files: ${url}`)
+                    return [] as IDocument[]
                 }
 
-                const loader = new CheerioWebBaseLoader(url)
+                if (isDebug) options.logger.info(`Fetching content of: ${url}`)
 
-                // scrape the whole page
-                const $ = await loader.scrape()
+                const response = await fetch(url)
+
+                if (!response.ok) {
+                    errorURLs.set(url, response.status as integer)
+                    if (isDebug) options.logger.error(`HTTP error - status: ${response.status}`)
+                    if (rejectErrorStatuses) return [] as IDocument[]
+                }
+
+                if (isDebug) options.logger.info(`Response status code: ${response.status}`)
+
+                // Read the response body as text
+                const data: string = await response.text()
+
+                // Load the HTML content into Cheerio
+                const $ = load(data)
 
                 // get the content of the selector if provided, otherwise get the entire body text
-                const content = params['selector'] ? $(params['selector']).text() : $('body').text()
+                const content = selector ? $(selector).text() : $('body').text()
 
                 // select the meta tag with property="og:title" and get the content attribute
                 const ogTitle = $("meta[property='og:title']")?.attr('content')
                 // if og:title is not present, use the page title node
                 const title = ogTitle ? ogTitle : $('title').text()
 
-                if (process.env.DEBUG === 'true') options.logger.info(`title: ${title}, url: ${url}`)
+                if (isDebug) options.logger.info(`title: ${title}, url: ${url}`)
                 // TODO: think about allowing user to specify the page meta(data) key:value pairs to extract (or omit?)
 
                 // create the initial document object
-                docs = [
+                let docs: IDocument[] = [
                     {
                         pageContent: content,
                         metadata: {
@@ -169,7 +190,7 @@ class Cheerio_DocumentLoaders implements INode {
 
                 return docs
             } catch (err) {
-                if (process.env.DEBUG === 'true') options.logger.error(`error in CheerioWebBaseLoader: ${err.message}, on page: ${url}`)
+                if (isDebug) options.logger.error(`error in CheerioWebBaseLoader: ${err.message}, on page: ${url}`)
                 return []
             }
         }
@@ -177,7 +198,7 @@ class Cheerio_DocumentLoaders implements INode {
         let docs: IDocument[] = []
 
         if (relativeLinksMethod) {
-            if (process.env.DEBUG === 'true') options.logger.info(`Start ${relativeLinksMethod}`)
+            if (isDebug) options.logger.info(`Start ${relativeLinksMethod}`)
             // if limit is 0 we don't want it to default to 10 so we check explicitly for null or undefined
             // so when limit is 0 we can fetch all the links
             if (limit === null || limit === undefined) limit = 10
@@ -188,15 +209,14 @@ class Cheerio_DocumentLoaders implements INode {
                     : relativeLinksMethod === 'webCrawl'
                     ? await webCrawl(url, limit)
                     : await xmlScrape(url, limit)
-            if (process.env.DEBUG === 'true') options.logger.info(`pages: ${JSON.stringify(pages)}, length: ${pages.length}`)
+            if (isDebug) options.logger.info(`pages: ${JSON.stringify(pages)}, length: ${pages.length}`)
             if (!pages || pages.length === 0) throw new Error('No relative links found')
             for (const page of pages) {
                 docs.push(...(await cheerioLoader(page)))
             }
-            if (process.env.DEBUG === 'true') options.logger.info(`Finish ${relativeLinksMethod}`)
+            if (isDebug) options.logger.info(`Finish ${relativeLinksMethod}`)
         } else if (selectedLinks && selectedLinks.length > 0) {
-            if (process.env.DEBUG === 'true')
-                options.logger.info(`pages: ${JSON.stringify(selectedLinks)}, length: ${selectedLinks.length}`)
+            if (isDebug) options.logger.info(`pages: ${JSON.stringify(selectedLinks)}, length: ${selectedLinks.length}`)
             for (const page of selectedLinks.slice(0, limit)) {
                 docs.push(...(await cheerioLoader(page)))
             }
@@ -234,6 +254,12 @@ class Cheerio_DocumentLoaders implements INode {
                               omitMetadataKeys
                           )
             }))
+        }
+
+        if (isDebug) {
+            options.logger.info(`Scrape completed`)
+            options.logger.info(`Total error responses: ${errorURLs.size}`)
+            for (const item of errorURLs) options.logger.info(`URL: ${item[0]}, status: ${item[1]}`)
         }
 
         return docs
