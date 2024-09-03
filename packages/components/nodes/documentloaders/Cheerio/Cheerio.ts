@@ -102,7 +102,7 @@ class Cheerio_DocumentLoaders implements INode {
             {
                 label: 'Reject Error Responses',
                 description: 'Reject documents with error status codes (4xx, 5xx) from the output',
-                name: 'rejectErrorStatuses',
+                name: 'rejectErrorResponses',
                 type: 'boolean',
                 default: true,
                 optional: true,
@@ -116,7 +116,7 @@ class Cheerio_DocumentLoaders implements INode {
         const metadata = nodeData.inputs?.metadata
         const relativeLinksMethod = nodeData.inputs?.relativeLinksMethod as string
         const selectedLinks = nodeData.inputs?.selectedLinks as string[]
-        const rejectErrorStatuses = nodeData.inputs?.rejectErrorStatuses as boolean
+        const rejectErrorResponses = nodeData.inputs?.rejectErrorResponses as boolean
         let limit = parseInt(nodeData.inputs?.limit as string)
 
         const _omitMetadataKeys = nodeData.inputs?.omitMetadataKeys as string
@@ -152,7 +152,7 @@ class Cheerio_DocumentLoaders implements INode {
                 if (!response.ok) {
                     errorURLs.set(url, response.status as integer)
                     if (isDebug) options.logger.error(`HTTP error - status: ${response.status}`)
-                    if (rejectErrorStatuses) return [] as IDocument[]
+                    if (rejectErrorResponses) return [] as IDocument[]
                 }
 
                 if (isDebug) options.logger.info(`Response status code: ${response.status}`)
