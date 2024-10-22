@@ -22,7 +22,7 @@ class Cheerio_DocumentLoaders implements INode {
     constructor() {
         this.label = 'Cheerio Web Scraper'
         this.name = 'cheerioWebScraper'
-        this.version = 1.3
+        this.version = 1.4
         this.type = 'Document'
         this.icon = 'cheerio.svg'
         this.category = 'Document Loaders'
@@ -66,11 +66,20 @@ class Cheerio_DocumentLoaders implements INode {
                 name: 'limit',
                 type: 'number',
                 optional: true,
-                default: '10',
+                default: 10,
                 additionalParams: true,
                 description:
                     'Only used when "Get Relative Links Method" is selected. Set 0 to retrieve all relative links, default limit is 10.',
                 warning: `Retrieving all links might take long time, and all links will be upserted again if the flow's state changed (eg: different URL, chunk size, etc)`
+            },
+            {
+                label: 'Crawl subdomains',
+                name: 'allowSubdomains',
+                type: 'boolean',
+                optional: true,
+                default: true,
+                additionalParams: true,
+                description: 'Allow crawling of relative links on subdomains when using the "Web Crawl" method'
             },
             {
                 label: 'Selector (CSS)',
@@ -112,12 +121,28 @@ class Cheerio_DocumentLoaders implements INode {
     }
 
     async init(nodeData: INodeData, _: string, options: ICommonObject): Promise<any> {
+        const isDebug = process.env.DEBUG === 'true'
+
         const textSplitter = nodeData.inputs?.textSplitter as TextSplitter
         const metadata = nodeData.inputs?.metadata
         const relativeLinksMethod = nodeData.inputs?.relativeLinksMethod as string
         const selectedLinks = nodeData.inputs?.selectedLinks as string[]
         const rejectErrorResponses = nodeData.inputs?.rejectErrorResponses as boolean
-        let limit = parseInt(nodeData.inputs?.limit as string)
+        const allowSubdomains = nodeData.inputs?.allowSubdomains as boolean
+
+        let limit = parseInt(`${nodeData.inputs?.limit}`, 10)
+        if (isNaN(limit) || limit < 0) limit = 10
+
+        if (isDebug) {
+            // log input settings
+            options.logger.info(`textSplitter: ${textSplitter}`)
+            options.logger.info(`metadata: ${metadata}`)
+            options.logger.info(`relativeLinksMethod: ${relativeLinksMethod}`)
+            options.logger.info(`selectedLinks: ${selectedLinks}`)
+            options.logger.info(`rejectErrorResponses: ${rejectErrorResponses}`)
+            options.logger.info(`allowSubdomains: ${allowSubdomains}`)
+            options.logger.info(`limit: ${limit}`)
+        }
 
         const _omitMetadataKeys = nodeData.inputs?.omitMetadataKeys as string
 
@@ -132,7 +157,6 @@ class Cheerio_DocumentLoaders implements INode {
             throw new Error('Invalid URL')
         }
 
-        const isDebug = process.env.DEBUG === 'true'
         let errorURLs: Map<string, integer> = new Map()
         let processedURLs: Set<string> = new Set()
 
@@ -207,15 +231,6 @@ class Cheerio_DocumentLoaders implements INode {
         if (relativeLinksMethod) {
             if (isDebug) options.logger.info(`Start ${relativeLinksMethod}`)
 
-            // Determine the limit for fetching links.
-            // If limit is explicitly set to null or undefined, default to 10.
-            // If limit is 0, fetch all links.
-            if (limit === null || limit === undefined) {
-                limit = 10
-            } else if (limit < 0) {
-                throw new Error('Limit cannot be less than 0')
-            }
-
             // Determine pages to process based on selectedLinks and relativeLinksMethod.
             let pages: string[]
             if (selectedLinks && selectedLinks.length > 0) {
@@ -223,7 +238,7 @@ class Cheerio_DocumentLoaders implements INode {
                 pages = selectedLinks.slice(0, limit === 0 ? undefined : limit)
             } else if (relativeLinksMethod === 'webCrawl') {
                 // If 'webCrawl' method is selected, fetch pages using web crawling.
-                pages = await webCrawl(url, limit)
+                pages = await webCrawl(url, limit, allowSubdomains)
             } else {
                 // Otherwise, fetch pages using XML scraping.
                 pages = await xmlScrape(url, limit)

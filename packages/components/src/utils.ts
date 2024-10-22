@@ -302,24 +302,49 @@ export const getAvailableURLs = async (url: string, limit: number) => {
 
 /**
  * Search for href through htmlBody string
- * @param {string} htmlBody
- * @param {string} baseURL
- * @returns {string[]}
+ * @param {string} htmlBody - The HTML content as a string.
+ * @param {string} baseURL - The base URL to resolve relative URLs.
+ * @param {boolean} [includeSubdomains=true] - Whether to include URLs from subdomains of the baseURL.
+ * @returns {string[]} - An array of processed URLs.
  */
-function getURLsFromHTML(htmlBody: string, baseURL: string): string[] {
+function getURLsFromHTML(htmlBody: string, baseURL: string, includeSubdomains: boolean = true): string[] {
+    const DEBUG = process.env.DEBUG === 'true'
     const dom = new JSDOM(htmlBody)
     const linkElements = dom.window.document.querySelectorAll('a')
-    const urls: string[] = []
-    for (const linkElement of linkElements) {
+    const urls: Set<string> = new Set()
+
+    if (DEBUG) console.info(`Found ${linkElements.length} in-page links`)
+
+    // Parse the baseURL to extract the base hostname
+    let baseHostname: string
+    try {
+        const baseURLObj = new URL(baseURL)
+        baseHostname = baseURLObj.hostname
+    } catch (err) {
+        if (DEBUG) console.error(`Invalid baseURL: ${err.message}`)
+        return Array.from(urls) // Return empty array if baseURL is invalid
+    }
+
+    linkElements.forEach((linkElement) => {
         try {
             const urlObj = new URL(linkElement.href, baseURL)
-            urls.push(urlObj.href)
-        } catch (err) {
-            if (process.env.DEBUG === 'true') console.error(`error with scraped URL: ${err.message}`)
-            continue
+            const urlHostname = urlObj.hostname
+
+            // Determine if the URL should be included based on the includeSubdomains flag
+            const isSameDomain = urlHostname === baseHostname
+            const isSubdomain = includeSubdomains && urlHostname.endsWith(`.${baseHostname}`)
+
+            if (isSameDomain || isSubdomain) {
+                if (!urls.has(urlObj.href)) urls.add(urlObj.href)
+            }
+        } catch (err: any) {
+            if (DEBUG) console.error(`Error with scraped URL (${linkElement.href}): ${err.message}`)
         }
-    }
-    return urls
+    })
+
+    if (DEBUG) console.info(`Total unique URLs after filtering: ${urls.size}`)
+
+    return Array.from(urls)
 }
 
 /**
@@ -339,65 +364,120 @@ function normalizeURL(urlString: string): string {
 
 /**
  * Recursive crawl using normalizeURL and getURLsFromHTML
- * @param {string} baseURL
- * @param {string} currentURL
- * @param {string[]} pages
- * @param {number} limit
- * @returns {Promise<string[]>}
+ * @param {string} baseURL - The base URL to start crawling from.
+ * @param {string} currentURL - The current URL being crawled.
+ * @param {string[]} pages - Accumulated list of crawled pages.
+ * @param {number} limit - Maximum number of pages to crawl.
+ * @param {boolean} [includeSubdomains=true] - Whether to include URLs from subdomains of the baseURL.
+ * @returns {Promise<string[]>} - A promise that resolves to an array of crawled URLs.
  */
-async function crawl(baseURL: string, currentURL: string, pages: string[], limit: number): Promise<string[]> {
-    const baseURLObj = new URL(baseURL)
-    const currentURLObj = new URL(currentURL)
+async function crawl(
+    baseURL: string,
+    currentURL: string,
+    pages: string[],
+    limit: number,
+    includeSubdomains: boolean = true
+): Promise<string[]> {
+    const DEBUG = process.env.DEBUG === 'true'
 
-    if (limit !== 0 && pages.length === limit) return pages
+    let baseURLObj: URL
+    let currentURLObj: URL
 
-    if (baseURLObj.hostname !== currentURLObj.hostname) return pages
-
-    const normalizeCurrentURL = baseURLObj.protocol + '//' + normalizeURL(currentURL)
-    if (pages.includes(normalizeCurrentURL)) {
+    try {
+        baseURLObj = new URL(baseURL)
+    } catch (err: any) {
+        if (DEBUG) console.error(`Invalid baseURL (${baseURL}): ${err.message}`)
         return pages
     }
 
-    pages.push(normalizeCurrentURL)
+    try {
+        currentURLObj = new URL(currentURL)
+    } catch (err: any) {
+        if (DEBUG) console.error(`Invalid currentURL (${currentURL}): ${err.message}`)
+        return pages
+    }
 
-    if (process.env.DEBUG === 'true') console.info(`actively crawling ${currentURL}`)
+    // Check if we've reached the limit
+    if (limit > 0 && pages.length >= limit) {
+        if (DEBUG) console.info(`Limit of ${limit} pages reached.`)
+        return pages
+    }
+
+    // Domain validation based on includeSubdomains flag
+    const isSameDomain = currentURLObj.hostname === baseURLObj.hostname
+    const isSubdomain = includeSubdomains && currentURLObj.hostname.endsWith(`.${baseURLObj.hostname}`)
+
+    if (!isSameDomain && !isSubdomain) {
+        if (DEBUG) console.info(`Skipping ${currentURL} as it's not in the same domain or a subdomain of ${baseURLObj.hostname}`)
+        return pages
+    }
+
+    // Normalize the current URL
+    const normalizedCurrentURL = `${baseURLObj.protocol}//${normalizeURL(currentURLObj.href)}`
+
+    // Check if the URL has already been crawled
+    if (pages.includes(normalizedCurrentURL)) {
+        return pages
+    }
+
+    // Add the URL to the list of crawled pages
+    pages.push(normalizedCurrentURL)
+
+    if (DEBUG) console.info(`Actively crawling: ${normalizedCurrentURL}`)
+
     try {
         const resp = await fetch(currentURL)
 
         if (resp.status > 399) {
-            if (process.env.DEBUG === 'true') console.error(`error in fetch with status code: ${resp.status}, on page: ${currentURL}`)
+            if (DEBUG) console.error(`Error in fetch with status code: ${resp.status}, on page: ${currentURL}`)
             return pages
         }
 
         const contentType: string | null = resp.headers.get('content-type')
-        if ((contentType && !contentType.includes('text/html')) || !contentType) {
-            if (process.env.DEBUG === 'true') console.error(`non html response, content type: ${contentType}, on page: ${currentURL}`)
+        if (!contentType || !contentType.includes('text/html')) {
+            if (DEBUG) console.error(`Non-HTML response, content type: ${contentType}, on page: ${currentURL}`)
             return pages
         }
 
         const htmlBody = await resp.text()
-        const nextURLs = getURLsFromHTML(htmlBody, currentURL)
+        const nextURLs = getURLsFromHTML(htmlBody, currentURL, includeSubdomains)
+
+        if (DEBUG) console.info(`Found ${nextURLs.length} URLs on page: ${currentURL}`)
+
+        // Use for...of to handle async recursion properly
         for (const nextURL of nextURLs) {
-            pages = await crawl(baseURL, nextURL, pages, limit)
+            if (limit > 0 && pages.length >= limit) {
+                if (DEBUG) console.info(`Limit of ${limit} pages reached during recursion.`)
+                break
+            }
+            pages = await crawl(baseURL, nextURL, pages, limit, includeSubdomains)
         }
-    } catch (err) {
-        if (process.env.DEBUG === 'true') console.error(`error in fetch url: ${err.message}, on page: ${currentURL}`)
+    } catch (err: any) {
+        if (DEBUG) console.error(`Error fetching URL (${currentURL}): ${err.message}`)
     }
+
     return pages
 }
 
 /**
  * Prep URL before passing into recursive crawl function
- * @param {string} stringURL
- * @param {number} limit
+ * @param {string} stringURL - The base URL to start crawling from.
+ * @param {number} limit - Maximum number of pages to crawl.
+ * @param {boolean} [includeSubdomains=true] - Whether to include URLs from subdomains of the baseURL.
  * @returns {Promise<string[]>}
  */
-export async function webCrawl(stringURL: string, limit: number): Promise<string[]> {
+export async function webCrawl(stringURL: string, limit: number, includeSubdomains: boolean = true): Promise<string[]> {
     const URLObj = new URL(stringURL)
     const modifyURL = stringURL.slice(-1) === '/' ? stringURL.slice(0, -1) : stringURL
-    return await crawl(URLObj.protocol + '//' + URLObj.hostname, modifyURL, [], limit)
+    return await crawl(URLObj.protocol + '//' + URLObj.hostname, modifyURL, [], limit, includeSubdomains)
 }
 
+/**
+ * Get URLs from a sitemap XML
+ * @param xmlBody
+ * @param limit
+ * @returns
+ */
 export function getURLsFromXML(xmlBody: string, limit: number): string[] {
     const dom = new JSDOM(xmlBody, { contentType: 'text/xml' })
     const linkElements = dom.window.document.querySelectorAll('url')
@@ -412,6 +492,12 @@ export function getURLsFromXML(xmlBody: string, limit: number): string[] {
     return urls
 }
 
+/**
+ * Scrape XML content
+ * @param currentURL
+ * @param limit
+ * @returns
+ */
 export async function xmlScrape(currentURL: string, limit: number): Promise<string[]> {
     let urls: string[] = []
     if (process.env.DEBUG === 'true') console.info(`actively scarping ${currentURL}`)
