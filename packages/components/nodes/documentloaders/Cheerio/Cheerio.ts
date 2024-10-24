@@ -130,6 +130,7 @@ class Cheerio_DocumentLoaders implements INode {
         const rejectErrorResponses = nodeData.inputs?.rejectErrorResponses as boolean
         const allowSubdomains = nodeData.inputs?.allowSubdomains as boolean
 
+        // NOTE: limit is always overriden to 3 when using the preview feature in the document store
         let limit = parseInt(`${nodeData.inputs?.limit}`, 10)
         if (isNaN(limit) || limit < 0) limit = 10
 
