@@ -9,6 +9,7 @@ import { AppBar, Box, CssBaseline, Toolbar, useMediaQuery } from '@mui/material'
 // project imports
 import Header from './Header'
 import Sidebar from './Sidebar'
+import Footer from './Footer'
 import { drawerWidth, headerHeight } from '@/store/constant'
 import { SET_MENU } from '@/store/actions'
 
@@ -97,6 +98,7 @@ const MainLayout = () => {
             {/* main content */}
             <Main theme={theme} open={leftDrawerOpened}>
                 <Outlet />
+                <Footer></Footer>
             </Main>
         </Box>
     )
