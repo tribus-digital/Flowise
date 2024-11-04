@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid'
 import { flatten, isEqual } from 'lodash'
 import { Pinecone, PineconeConfiguration } from '@pinecone-database/pinecone'
 import { PineconeStoreParams, PineconeStore } from '@langchain/pinecone'
@@ -194,7 +195,18 @@ class Pinecone_VectorStores implements INode {
 
                     return res
                 } else {
-                    await PineconeStore.fromDocuments(finalDocs, embeddings, obj)
+                    // Have to use `.addDocuments` on a `PineconeStore` instance to specify ids for each document
+                    // We need this if we want to work with documents and chunks of the same document for RAG workflows in Pinecone
+
+                    // await PineconeStore.fromDocuments(finalDocs, embeddings, obj)
+                    const pineconeStore = new PineconeStore(embeddings, obj)
+
+                    // use `id` from the document metadata if available, else generate a new uuid
+                    const addedIds = await pineconeStore.addDocuments(
+                        finalDocs,
+                        finalDocs.map((doc) => doc.metadata?.id ?? uuidv4())
+                    )
+
                     return { numAdded: finalDocs.length, addedDocs: finalDocs }
                 }
             } catch (e) {
