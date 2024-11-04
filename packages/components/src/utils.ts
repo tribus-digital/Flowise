@@ -14,7 +14,7 @@ export const notEmptyRegex = '(.|\\s)*\\S(.|\\s)*' //return true if string is no
 export const FLOWISE_CHATID = 'flowise_chatId'
 
 /*
- * List of dependencies allowed to be import in vm2
+ * List of dependencies allowed to be import in @flowiseai/nodevm
  */
 export const availableDependencies = [
     '@aws-sdk/client-bedrock-runtime',
@@ -460,47 +460,127 @@ async function crawl(
 }
 
 /**
+ * Fetches the Last-Modified date of a given URL if available.
+ *
+ * @param url - The URL of the resource to check.
+ * @returns {Promise<string | null>}  A Promise that resolves to a string containing the Last-Modified date if available, or null if not.
+ */
+async function getLastModified(url: string): Promise<string | null> {
+    const DEBUG = process.env.DEBUG === 'true'
+
+    try {
+        const response = await fetch(url, { method: 'HEAD' })
+
+        // Check for the Last-Modified header and return it if available
+        const lastModified = response.headers.get('last-modified')
+        if (lastModified) {
+            return lastModified
+        } else {
+            console.log('Last-Modified header not found')
+            return null
+        }
+    } catch (error) {
+        if (DEBUG) console.error('Error fetching headers:', error)
+        return null
+    }
+}
+
+/**
  * Prep URL before passing into recursive crawl function
  * @param {string} stringURL - The base URL to start crawling from.
  * @param {number} limit - Maximum number of pages to crawl.
  * @param {boolean} [includeSubdomains=true] - Whether to include URLs from subdomains of the baseURL.
- * @returns {Promise<string[]>}
+ * @returns {Promise<string[]>} - A promise that resolves to an array of crawled URLs or an object mapping each URL to its lastModified date (if available).
  */
 export async function webCrawl(stringURL: string, limit: number, includeSubdomains: boolean = true): Promise<string[]> {
     const URLObj = new URL(stringURL)
     const modifyURL = stringURL.slice(-1) === '/' ? stringURL.slice(0, -1) : stringURL
-    return await crawl(URLObj.protocol + '//' + URLObj.hostname, modifyURL, [], limit, includeSubdomains)
-}
-
-/**
- * Get URLs from a sitemap XML
- * @param xmlBody
- * @param limit
- * @returns
- */
-export function getURLsFromXML(xmlBody: string, limit: number): string[] {
-    const dom = new JSDOM(xmlBody, { contentType: 'text/xml' })
-    const linkElements = dom.window.document.querySelectorAll('url')
-    const urls: string[] = []
-    for (const linkElement of linkElements) {
-        const locElement = linkElement.querySelector('loc')
-        if (limit !== 0 && urls.length === limit) break
-        if (locElement?.textContent) {
-            urls.push(locElement.textContent)
-        }
-    }
+    const urls = await crawl(URLObj.protocol + '//' + URLObj.hostname, modifyURL, [], limit, includeSubdomains)
     return urls
 }
 
 /**
- * Scrape XML content
- * @param currentURL
- * @param limit
- * @returns
+ * Get URLs from a sitemap XML.
+ * Assumes that each URL is unique in the sitemap.
+ *
+ * @param xmlBody - The sitemap XML as a string.
+ * @param limit - The maximum number of URLs to return (0 for no limit).
+ * @returns An array of URLs.
  */
-export async function xmlScrape(currentURL: string, limit: number): Promise<string[]> {
-    let urls: string[] = []
-    if (process.env.DEBUG === 'true') console.info(`actively scarping ${currentURL}`)
+export function getURLsFromXML(xmlBody: string, limit: number): string[] {
+    const dom = new JSDOM(xmlBody, { contentType: 'text/xml' })
+    const urlElements = dom.window.document.querySelectorAll('url')
+    const urls: string[] = []
+
+    let count = 0
+
+    for (const urlElement of urlElements) {
+        const locElement = urlElement.querySelector('loc')
+        const url = locElement?.textContent?.trim()
+
+        if (!url) continue
+
+        urls.push(url)
+
+        count++
+        if (limit !== 0 && count >= limit) {
+            break
+        }
+    }
+
+    return urls
+}
+
+/**
+ * Get URLs and their lastmod dates from a sitemap XML.
+ * Assumes that each URL is unique in the sitemap.
+ *
+ * @param xmlBody - The sitemap XML as a string.
+ * @param limit - The maximum number of URLs to return (0 for no limit).
+ * @returns An object mapping each URL to its lastmod timestamp (if available).
+ */
+export function getURLsWithLastModifiedFromXML(xmlBody: string, limit: number): { [url: string]: number | null } {
+    const dom = new JSDOM(xmlBody, { contentType: 'text/xml' })
+    const urlElements = dom.window.document.querySelectorAll('url')
+    const urlsWithLastMod: { [url: string]: number | null } = {}
+
+    let count = 0
+
+    for (const urlElement of urlElements) {
+        const locElement = urlElement.querySelector('loc')
+        const lastmodElement = urlElement.querySelector('lastmod')
+        const url = locElement?.textContent?.trim()
+        const lastmod = lastmodElement?.textContent?.trim() || null
+
+        if (!url) continue
+
+        urlsWithLastMod[url] = dateToUTCTimestamp(lastmod)
+
+        count++
+        if (limit !== 0 && count >= limit) {
+            break
+        }
+    }
+
+    return urlsWithLastMod
+}
+
+/**
+ * Scrape XML sitemap content and return URLs or URLs with lastmod dates.
+ * @param currentURL - The URL of the XML sitemap to scrape
+ * @param limit - The maximum number of URLs to return (0 for no limit)
+ * @param includeLastModified - Whether to include the lastmod date of each URL
+ * @returns An array of URLs or an object mapping each URL to its lastModified date (if available)
+ */
+export async function xmlScrape(
+    currentURL: string,
+    limit: number,
+    includeLastModified: boolean = false
+): Promise<string[] | { [url: string]: number | null }> {
+    let urls: string[] | { [url: string]: number | null } = includeLastModified ? {} : []
+
+    if (process.env.DEBUG === 'true') console.info(`Actively scraping ${currentURL}`)
+
     try {
         const resp = await fetch(currentURL)
 
@@ -516,11 +596,24 @@ export async function xmlScrape(currentURL: string, limit: number): Promise<stri
         }
 
         const xmlBody = await resp.text()
-        urls = getURLsFromXML(xmlBody, limit)
+        if (includeLastModified) urls = getURLsWithLastModifiedFromXML(xmlBody, limit)
+        else urls = getURLsFromXML(xmlBody, limit)
     } catch (err) {
         if (process.env.DEBUG === 'true') console.error(`error in fetch url: ${err.message}, on page: ${currentURL}`)
     }
+
     return urls
+}
+
+/**
+ * Converts a date string to a UTC timestamp.
+ * @param dateStr - The date string to convert.
+ * @returns The UTC timestamp in milliseconds, or null if invalid.
+ */
+function dateToUTCTimestamp(dateStr: string | null): number | null {
+    if (!dateStr) return null
+    const date = new Date(dateStr)
+    return isNaN(date.getTime()) ? null : date.getTime()
 }
 
 /**
