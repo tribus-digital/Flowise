@@ -1,7 +1,7 @@
 import { START } from '@langchain/langgraph'
 import { ICommonObject, IDatabaseEntity, INode, INodeData, INodeParams, ISeqAgentNode } from '../../../src/Interface'
 import { availableDependencies, defaultAllowBuiltInDep, getVars, prepareSandboxVars } from '../../../src/utils'
-import { NodeVM } from 'vm2'
+import { NodeVM } from '@flowiseai/nodevm'
 import { DataSource } from 'typeorm'
 
 const defaultFunc = `{
