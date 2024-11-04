@@ -1,4 +1,6 @@
 import { TextSplitter } from 'langchain/text_splitter'
+import { MD5, enc as Enc } from 'crypto-js'
+
 import { omit } from 'lodash'
 import { test } from 'linkifyjs'
 import { parse } from 'css-what'
@@ -6,7 +8,6 @@ import { load, SelectorType } from 'cheerio'
 import { webCrawl, xmlScrape } from '../../../src'
 
 import { ICommonObject, IDocument, INode, INodeData, INodeParams } from '../../../src/Interface'
-import { integer } from '@opensearch-project/opensearch/api/types'
 
 class Cheerio_DocumentLoaders implements INode {
     label: string
@@ -89,6 +90,27 @@ class Cheerio_DocumentLoaders implements INode {
                 optional: true,
                 additionalParams: true
             },
+
+            {
+                label: 'Document ID Field',
+                name: 'documentIdField',
+                type: 'string',
+                default: 'id',
+                description:
+                    'The field name to use in the metadata to store an id for each document, default is "id". Leave empty to omit the document id',
+                optional: true,
+                additionalParams: true
+            },
+
+            {
+                label: 'Include Last-Modified',
+                name: 'includeLastModified',
+                type: 'boolean',
+                optional: true,
+                default: true,
+                additionalParams: true,
+                description: 'Include a last modified timestamp in the metadata for each URL when using the "Scrape XML Sitemap" method'
+            },
             {
                 label: 'Additional Metadata',
                 name: 'metadata',
@@ -130,6 +152,12 @@ class Cheerio_DocumentLoaders implements INode {
         const rejectErrorResponses = nodeData.inputs?.rejectErrorResponses as boolean
         const allowSubdomains = nodeData.inputs?.allowSubdomains as boolean
 
+        const includeLastModified = nodeData.inputs?.includeLastModified as boolean
+
+        // Document ID settings
+        const documentIdField: string = (nodeData.inputs?.documentIdField ?? '').trim()
+        const useDocumentId = documentIdField.length > 0
+
         // NOTE: limit is always overriden to 3 when using the preview feature in the document store
         let limit = parseInt(`${nodeData.inputs?.limit}`, 10)
         if (isNaN(limit) || limit < 0) limit = 10
@@ -140,9 +168,12 @@ class Cheerio_DocumentLoaders implements INode {
             options.logger.info(`metadata: ${metadata}`)
             options.logger.info(`relativeLinksMethod: ${relativeLinksMethod}`)
             options.logger.info(`selectedLinks: ${selectedLinks}`)
+            options.logger.info(`limit: ${limit}`)
             options.logger.info(`rejectErrorResponses: ${rejectErrorResponses}`)
             options.logger.info(`allowSubdomains: ${allowSubdomains}`)
-            options.logger.info(`limit: ${limit}`)
+            options.logger.info(`includeLastModified: ${includeLastModified}`)
+            options.logger.info(`documentIdField: ${documentIdField}`)
+            options.logger.info(`useDocumentId: ${useDocumentId}`)
         }
 
         const _omitMetadataKeys = nodeData.inputs?.omitMetadataKeys as string
@@ -158,13 +189,13 @@ class Cheerio_DocumentLoaders implements INode {
             throw new Error('Invalid URL')
         }
 
-        let errorURLs: Map<string, integer> = new Map()
+        let errorURLs: Map<string, number> = new Map()
         let processedURLs: Set<string> = new Set()
 
         const selector: SelectorType = nodeData.inputs?.selector as SelectorType
         if (selector) parse(selector) // will throw error if invalid
 
-        async function cheerioLoader(url: string): Promise<IDocument[]> {
+        async function cheerioLoader(url: string, pageIndex: number, lastModified: number | null = null): Promise<IDocument[]> {
             try {
                 if (processedURLs.has(url)) {
                     if (isDebug) options.logger.info(`URL already processed: ${url}`)
@@ -182,7 +213,7 @@ class Cheerio_DocumentLoaders implements INode {
                 const response = await fetch(url)
 
                 if (!response.ok) {
-                    errorURLs.set(url, response.status as integer)
+                    errorURLs.set(url, response.status)
                     if (isDebug) options.logger.error(`HTTP error - status: ${response.status}`)
                     if (rejectErrorResponses) return [] as IDocument[]
                 }
@@ -202,9 +233,12 @@ class Cheerio_DocumentLoaders implements INode {
                 const ogTitle = $("meta[property='og:title']")?.attr('content')
                 // if og:title is not present, use the page title node
                 const title = ogTitle ? ogTitle : $('title').text()
+                // TODO: consider allowing user to specify the page meta(data) key:value pairs to extract (or omit?)
 
-                if (isDebug) options.logger.info(`title: ${title}, url: ${url}`)
-                // TODO: think about allowing user to specify the page meta(data) key:value pairs to extract (or omit?)
+                // a short hash of the URL to use as a unique identifier, strip the trailing b64 padding characters
+                const urlHash = MD5(url).toString(Enc.Base64).substring(0, 22)
+
+                if (isDebug) options.logger.info(`title: ${title}, url: ${url} pageIndex:${pageIndex} hash: ${urlHash}`)
 
                 // create the initial document object
                 let docs: IDocument[] = [
@@ -212,13 +246,27 @@ class Cheerio_DocumentLoaders implements INode {
                         pageContent: content,
                         metadata: {
                             source: url,
-                            title: title
+                            title: title,
+                            ...(useDocumentId && { [documentIdField]: `${pageIndex}:${urlHash}#` }),
+                            ...(includeLastModified && { lastModified: lastModified || -1 })
                         }
                     }
                 ]
 
                 // split into chunks if a text splitter is specified
-                if (textSplitter) docs = await textSplitter.splitDocuments(docs)
+                if (textSplitter) {
+                    docs = await textSplitter.splitDocuments(docs)
+                    // add chunk index information to the document id for each chunk
+                    docs = docs.map((doc, index) => {
+                        return {
+                            ...doc,
+                            metadata: {
+                                ...doc.metadata,
+                                ...(useDocumentId && { [documentIdField]: `${doc.metadata[documentIdField]}${index}` })
+                            }
+                        }
+                    })
+                }
 
                 return docs
             } catch (err) {
@@ -234,6 +282,8 @@ class Cheerio_DocumentLoaders implements INode {
 
             // Determine pages to process based on selectedLinks and relativeLinksMethod.
             let pages: string[]
+            let pagesLastMod: { [key: string]: number | null } = {}
+
             if (selectedLinks && selectedLinks.length > 0) {
                 // If specific links are selected, use them up to the specified limit.
                 pages = selectedLinks.slice(0, limit === 0 ? undefined : limit)
@@ -242,7 +292,8 @@ class Cheerio_DocumentLoaders implements INode {
                 pages = await webCrawl(url, limit, allowSubdomains)
             } else {
                 // Otherwise, fetch pages using XML scraping.
-                pages = await xmlScrape(url, limit)
+                pagesLastMod = (await xmlScrape(url, limit, true)) as { [key: string]: number | null }
+                pages = Object.keys(pagesLastMod)
             }
 
             if (isDebug) options.logger.info(`pages: ${JSON.stringify(pages)}, length: ${pages.length}`)
@@ -253,8 +304,8 @@ class Cheerio_DocumentLoaders implements INode {
             }
 
             // Process each page to extract content using cheerioLoader.
-            for (const page of pages) {
-                const loadedDocs = await cheerioLoader(page)
+            for (const [index, page] of pages.entries()) {
+                const loadedDocs = await cheerioLoader(page, index, pagesLastMod[page])
                 docs.push(...loadedDocs)
             }
 
@@ -264,13 +315,13 @@ class Cheerio_DocumentLoaders implements INode {
             if (isDebug) options.logger.info(`pages: ${JSON.stringify(selectedLinks)}, length: ${selectedLinks.length}`)
 
             // Process each selected link up to the specified limit.
-            for (const page of selectedLinks.slice(0, limit)) {
-                const loadedDocs = await cheerioLoader(page)
+            for (const [index, page] of selectedLinks.slice(0, limit).entries()) {
+                const loadedDocs = await cheerioLoader(page, index)
                 docs.push(...loadedDocs)
             }
         } else {
             // If neither relativeLinksMethod nor selectedLinks are provided, load from the base URL.
-            docs = await cheerioLoader(url)
+            docs = await cheerioLoader(url, 0)
         }
 
         // If metadata is provided, update the metadata for each document.
