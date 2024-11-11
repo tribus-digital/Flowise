@@ -104,3 +104,6 @@
 ## S/MIME message
 *.smime
 *.vsix
+dev/outputs/
+dev/chat_system_prompt.txt
+dev/questions.json

@@ -1,0 +1,10 @@
+Context:
+{context}
+
+-------------------
+-------------------
+
+Question:
+{question}
+
+Now reread the context fully before starting the task.
