@@ -7,6 +7,7 @@ import { Readable } from 'node:stream'
 import * as fsDefault from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import crypto from 'crypto'
 
 import { DirectoryLoader } from 'langchain/document_loaders/fs/directory'
 import { JSONLoader } from 'langchain/document_loaders/fs/json'
@@ -171,6 +172,28 @@ class S3_DocumentLoaders implements INode {
 
         const tempDir = fsDefault.mkdtempSync(path.join(os.tmpdir(), 's3fileloader-'))
 
+        // Helper to sanitize S3 keys for filesystem
+        function sanitizeKey(key: string): string {
+            // Replace invalid characters with underscores
+            const sanitized = key.replace(/[^a-zA-Z0-9-_./]/g, '_')
+
+            // use a hash of the original key to ensure uniqueness
+            const hash = crypto.createHash('sha1').update(key).digest('hex').substring(0, 8)
+
+            // Split the sanitized path into directory parts and the filename
+            const dir = path.dirname(sanitized)
+            const baseName = path.basename(sanitized)
+
+            // Parse the filename to separate the name and extension
+            const parsed = path.parse(baseName)
+
+            // Insert the hash before the extension if it exists
+            const sanitizedFileName = parsed.ext ? `${parsed.name}_${hash}${parsed.ext}` : `${parsed.name}_${hash}`
+
+            // Reconstruct the full sanitized path
+            return path.join(dir, sanitizedFileName)
+        }
+
         try {
             const s3Client = new S3Client(s3Config)
 
@@ -185,7 +208,9 @@ class S3_DocumentLoaders implements INode {
 
             await Promise.all(
                 keys.map(async (key) => {
-                    const filePath = path.join(tempDir, key)
+                    const sanitizedKey = sanitizeKey(key)
+                    const filePath = path.join(tempDir, sanitizedKey)
+
                     try {
                         const response = await s3Client.send(
                             new GetObjectCommand({
