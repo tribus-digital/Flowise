@@ -14,7 +14,8 @@ const getAllLinks = async (requestUrl: string, relativeLinksMethod: string, quer
         }
         const limit = parseInt(queryLimit)
         if (process.env.DEBUG === 'true') console.info(`Start ${relativeLinksMethod}`)
-        const links: string[] = relativeLinksMethod === 'webCrawl' ? await webCrawl(url, limit) : await xmlScrape(url, limit)
+        const links: string[] =
+            relativeLinksMethod === 'webCrawl' ? await webCrawl(url, limit) : ((await xmlScrape(url, limit, false)) as string[])
         if (process.env.DEBUG === 'true') console.info(`Finish ${relativeLinksMethod}`)
         const dbResponse = {
             status: 'OK',

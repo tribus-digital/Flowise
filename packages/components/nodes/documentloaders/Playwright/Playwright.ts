@@ -135,6 +135,7 @@ class Playwright_DocumentLoaders implements INode {
     }
 
     async init(nodeData: INodeData, _: string, options: ICommonObject): Promise<any> {
+        const isDebug = process.env.DEBUG === 'true'
         const textSplitter = nodeData.inputs?.textSplitter as TextSplitter
         const metadata = nodeData.inputs?.metadata
         const relativeLinksMethod = nodeData.inputs?.relativeLinksMethod as string
@@ -155,7 +156,7 @@ class Playwright_DocumentLoaders implements INode {
             throw new Error('Invalid URL')
         }
 
-        async function playwrightLoader(url: string): Promise<any> {
+        async function playwrightLoader(url: string, pageIndex: number, lastModified: number | null = null): Promise<any> {
             try {
                 let docs = []
                 const config: PlaywrightWebBaseLoaderOptions = {
@@ -186,37 +187,57 @@ class Playwright_DocumentLoaders implements INode {
                 }
                 return docs
             } catch (err) {
-                if (process.env.DEBUG === 'true') options.logger.error(`error in PlaywrightWebBaseLoader: ${err.message}, on page: ${url}`)
+                if (isDebug) options.logger.error(`error in PlaywrightWebBaseLoader: ${err.message}, on page: ${url}`)
             }
         }
 
         let docs: IDocument[] = []
+
         if (relativeLinksMethod) {
-            if (process.env.DEBUG === 'true') options.logger.info(`Start ${relativeLinksMethod}`)
-            // if limit is 0 we don't want it to default to 10 so we check explicitly for null or undefined
-            // so when limit is 0 we can fetch all the links
-            if (limit === null || limit === undefined) limit = 10
-            else if (limit < 0) throw new Error('Limit cannot be less than 0')
-            const pages: string[] =
-                selectedLinks && selectedLinks.length > 0
-                    ? selectedLinks.slice(0, limit === 0 ? undefined : limit)
-                    : relativeLinksMethod === 'webCrawl'
-                    ? await webCrawl(url, limit)
-                    : await xmlScrape(url, limit)
-            if (process.env.DEBUG === 'true') options.logger.info(`pages: ${JSON.stringify(pages)}, length: ${pages.length}`)
-            if (!pages || pages.length === 0) throw new Error('No relative links found')
-            for (const page of pages) {
-                docs.push(...(await playwrightLoader(page)))
+            if (isDebug) options.logger.info(`Start ${relativeLinksMethod}`)
+
+            // Determine pages to process based on selectedLinks and relativeLinksMethod.
+            let pages: string[]
+            let pagesLastMod: { [key: string]: number | null } = {}
+
+            if (selectedLinks && selectedLinks.length > 0) {
+                // If specific links are selected, use them up to the specified limit.
+                pages = selectedLinks.slice(0, limit === 0 ? undefined : limit)
+            } else if (relativeLinksMethod === 'webCrawl') {
+                // If 'webCrawl' method is selected, fetch pages using web crawling.
+                pages = await webCrawl(url, limit, true)
+            } else {
+                // Otherwise, fetch pages using XML scraping.
+                pagesLastMod = (await xmlScrape(url, limit, true)) as { [key: string]: number | null }
+                pages = Object.keys(pagesLastMod)
             }
-            if (process.env.DEBUG === 'true') options.logger.info(`Finish ${relativeLinksMethod}`)
+
+            if (isDebug) options.logger.info(`pages: ${JSON.stringify(pages)}, length: ${pages.length}`)
+
+            // If no pages were found, throw an error.
+            if (!pages || pages.length === 0) {
+                throw new Error('No relative links found')
+            }
+
+            // Process each page to extract content using cheerioLoader.
+            for (const [index, page] of pages.entries()) {
+                const loadedDocs = await playwrightLoader(page, index, pagesLastMod[page])
+                docs.push(...loadedDocs)
+            }
+
+            if (isDebug) options.logger.info(`Finish ${relativeLinksMethod}`)
         } else if (selectedLinks && selectedLinks.length > 0) {
-            if (process.env.DEBUG === 'true')
-                options.logger.info(`pages: ${JSON.stringify(selectedLinks)}, length: ${selectedLinks.length}`)
-            for (const page of selectedLinks.slice(0, limit)) {
-                docs.push(...(await playwrightLoader(page)))
+            // If no relativeLinksMethod but selectedLinks are provided, process them.
+            if (isDebug) options.logger.info(`pages: ${JSON.stringify(selectedLinks)}, length: ${selectedLinks.length}`)
+
+            // Process each selected link up to the specified limit.
+            for (const [index, page] of selectedLinks.slice(0, limit).entries()) {
+                const loadedDocs = await playwrightLoader(page, index)
+                docs.push(...loadedDocs)
             }
         } else {
-            docs = await playwrightLoader(url)
+            // If neither relativeLinksMethod nor selectedLinks are provided, load from the base URL.
+            docs = await playwrightLoader(url, 0)
         }
 
         if (metadata) {

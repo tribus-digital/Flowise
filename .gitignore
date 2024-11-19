@@ -104,6 +104,8 @@
 ## S/MIME message
 *.smime
 *.vsix
+
+# local dev/test files
 dev/outputs/
 dev/chat_system_prompt.txt
 dev/questions.json
