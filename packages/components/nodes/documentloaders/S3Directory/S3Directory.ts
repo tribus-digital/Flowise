@@ -204,12 +204,25 @@ class S3_DocumentLoaders implements INode {
                 })
             )
 
-            const keys: string[] = (listObjectsOutput?.Contents ?? []).filter((item) => item.Key && item.ETag).map((item) => item.Key!)
+            const validItems = (listObjectsOutput?.Contents ?? []).filter((item) => item.Key && item.ETag)
+
+            const keys: string[] = validItems.map((item) => item.Key!)
+            const sanitizedKeys = keys.map(sanitizeKey)
+
+            // Create a mapping of sanitized keys to metadata so we can remap the source path and add other metadata to the documents later
+            const metadataBySanitizedKey = Object.fromEntries(
+                validItems.map((item, index) => [
+                    sanitizedKeys[index],
+                    {
+                        key: item.Key!,
+                        lastModified: item.LastModified?.toISOString() ?? null
+                    }
+                ])
+            )
 
             await Promise.all(
-                keys.map(async (key) => {
-                    const sanitizedKey = sanitizeKey(key)
-                    const filePath = path.join(tempDir, sanitizedKey)
+                keys.map(async (key, index) => {
+                    const filePath = path.join(tempDir, sanitizedKeys[index])
 
                     try {
                         const response = await s3Client.send(
@@ -293,14 +306,25 @@ class S3_DocumentLoaders implements INode {
                 true
             )
 
-            let docs = []
+            let docs = await loader.load()
+            // remap the source path in the metadata to the original s3 key rather than the local temp directory path
+            docs = docs.map((doc) => {
+                // relative path is the sanitized key for the file
+                const relativePath = path.relative(tempDir, doc.metadata.source)
+                const metadataEntry = metadataBySanitizedKey[relativePath]
+                return {
+                    ...doc,
+                    metadata: {
+                        ...doc.metadata,
+                        source: metadataEntry.key, // remap the source back to the original s3 key
+                        lastModified: metadataEntry.lastModified
+                    }
+                }
+            })
 
             if (textSplitter) {
-                let splittedDocs = await loader.load()
-                splittedDocs = await textSplitter.splitDocuments(splittedDocs)
-                docs.push(...splittedDocs)
-            } else {
-                docs = await loader.load()
+                let splittedDocs = await textSplitter.splitDocuments(docs)
+                docs = splittedDocs
             }
 
             if (metadata) {
