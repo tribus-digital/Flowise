@@ -1,13 +1,12 @@
 import { omit } from 'lodash'
-import { ICommonObject, INode, INodeData, INodeOptionsValue, INodeParams } from '../../../src/Interface'
-import { getCredentialData, getCredentialParam } from '../../../src/utils'
+import { ICommonObject, IDocument, INode, INodeData, INodeOptionsValue, INodeParams } from '../../../src/Interface'
+import { getCredentialData, getCredentialParam, sanitizeWebPath, splitDocsWithChunkInformation } from '../../../src/utils'
 import { S3Client, GetObjectCommand, S3ClientConfig, ListObjectsV2Command, ListObjectsV2Output } from '@aws-sdk/client-s3'
 import { getRegions, MODEL_TYPE } from '../../../src/modelLoader'
 import { Readable } from 'node:stream'
 import * as fsDefault from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
-import crypto from 'crypto'
 
 import { DirectoryLoader } from 'langchain/document_loaders/fs/directory'
 import { JSONLoader } from 'langchain/document_loaders/fs/json'
@@ -136,6 +135,8 @@ class S3_DocumentLoaders implements INode {
         const metadata = nodeData.inputs?.metadata
         const _omitMetadataKeys = nodeData.inputs?.omitMetadataKeys as string
 
+        const debug = process.env.DEBUG === 'true'
+
         let omitMetadataKeys: string[] = []
         if (_omitMetadataKeys) {
             omitMetadataKeys = _omitMetadataKeys.split(',').map((key) => key.trim())
@@ -172,28 +173,6 @@ class S3_DocumentLoaders implements INode {
 
         const tempDir = fsDefault.mkdtempSync(path.join(os.tmpdir(), 's3fileloader-'))
 
-        // Helper to sanitize S3 keys for filesystem
-        function sanitizeKey(key: string): string {
-            // Replace invalid characters with underscores
-            const sanitized = key.replace(/[^a-zA-Z0-9-_./]/g, '_')
-
-            // use a hash of the original key to ensure uniqueness
-            const hash = crypto.createHash('sha1').update(key).digest('hex').substring(0, 8)
-
-            // Split the sanitized path into directory parts and the filename
-            const dir = path.dirname(sanitized)
-            const baseName = path.basename(sanitized)
-
-            // Parse the filename to separate the name and extension
-            const parsed = path.parse(baseName)
-
-            // Insert the hash before the extension if it exists
-            const sanitizedFileName = parsed.ext ? `${parsed.name}_${hash}${parsed.ext}` : `${parsed.name}_${hash}`
-
-            // Reconstruct the full sanitized path
-            return path.join(dir, sanitizedFileName)
-        }
-
         try {
             const s3Client = new S3Client(s3Config)
 
@@ -207,18 +186,10 @@ class S3_DocumentLoaders implements INode {
             const validItems = (listObjectsOutput?.Contents ?? []).filter((item) => item.Key && item.ETag)
 
             const keys: string[] = validItems.map((item) => item.Key!)
-            const sanitizedKeys = keys.map(sanitizeKey)
+            const sanitizedKeys = keys.map(sanitizeWebPath)
 
-            // Create a mapping of sanitized keys to metadata so we can remap the source path and add other metadata to the documents later
-            const metadataBySanitizedKey = Object.fromEntries(
-                validItems.map((item, index) => [
-                    sanitizedKeys[index],
-                    {
-                        key: item.Key!,
-                        lastModified: item.LastModified?.toISOString() ?? null
-                    }
-                ])
-            )
+            // Create a mapping of sanitized keys to metadata so we can remap the source path later
+            const sanitizedKeyToKey = Object.fromEntries(validItems.map((item, index) => [sanitizedKeys[index], item.Key!]))
 
             await Promise.all(
                 keys.map(async (key, index) => {
@@ -255,75 +226,26 @@ class S3_DocumentLoaders implements INode {
                 })
             )
 
-            const loader = new DirectoryLoader(
-                tempDir,
-                {
-                    '.json': (path) => new JSONLoader(path),
-                    '.txt': (path) => new TextLoader(path),
-                    '.csv': (path) => new CSVLoader(path),
-                    '.docx': (path) => new DocxLoader(path),
-                    '.pdf': (path) =>
-                        pdfUsage === 'perFile'
-                            ? // @ts-ignore
-                              new PDFLoader(path, { splitPages: false, pdfjs: () => import('pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js') })
-                            : // @ts-ignore
-                              new PDFLoader(path, { pdfjs: () => import('pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js') }),
-                    '.aspx': (path) => new TextLoader(path),
-                    '.asp': (path) => new TextLoader(path),
-                    '.cpp': (path) => new TextLoader(path), // C++
-                    '.c': (path) => new TextLoader(path),
-                    '.cs': (path) => new TextLoader(path),
-                    '.css': (path) => new TextLoader(path),
-                    '.go': (path) => new TextLoader(path), // Go
-                    '.h': (path) => new TextLoader(path), // C++ Header files
-                    '.kt': (path) => new TextLoader(path), // Kotlin
-                    '.java': (path) => new TextLoader(path), // Java
-                    '.js': (path) => new TextLoader(path), // JavaScript
-                    '.less': (path) => new TextLoader(path), // Less files
-                    '.ts': (path) => new TextLoader(path), // TypeScript
-                    '.php': (path) => new TextLoader(path), // PHP
-                    '.proto': (path) => new TextLoader(path), // Protocol Buffers
-                    '.python': (path) => new TextLoader(path), // Python
-                    '.py': (path) => new TextLoader(path), // Python
-                    '.rst': (path) => new TextLoader(path), // reStructuredText
-                    '.ruby': (path) => new TextLoader(path), // Ruby
-                    '.rb': (path) => new TextLoader(path), // Ruby
-                    '.rs': (path) => new TextLoader(path), // Rust
-                    '.scala': (path) => new TextLoader(path), // Scala
-                    '.sc': (path) => new TextLoader(path), // Scala
-                    '.scss': (path) => new TextLoader(path), // Sass
-                    '.sol': (path) => new TextLoader(path), // Solidity
-                    '.sql': (path) => new TextLoader(path), //SQL
-                    '.swift': (path) => new TextLoader(path), // Swift
-                    '.markdown': (path) => new TextLoader(path), // Markdown
-                    '.md': (path) => new TextLoader(path), // Markdown
-                    '.tex': (path) => new TextLoader(path), // LaTeX
-                    '.ltx': (path) => new TextLoader(path), // LaTeX
-                    '.html': (path) => new TextLoader(path), // HTML
-                    '.vb': (path) => new TextLoader(path), // Visual Basic
-                    '.xml': (path) => new TextLoader(path) // XML
-                },
-                true
-            )
+            const loader = new DirectoryLoader(tempDir, this.getLoaders(pdfUsage), true)
 
             let docs = await loader.load()
-            // remap the source path in the metadata to the original s3 key rather than the local temp directory path
+
+            // remap the `source` in the metadata to the original s3 key rather than the local temp directory path
             docs = docs.map((doc) => {
                 // relative path is the sanitized key for the file
                 const relativePath = path.relative(tempDir, doc.metadata.source)
-                const metadataEntry = metadataBySanitizedKey[relativePath]
+                const key = sanitizedKeyToKey[relativePath]
                 return {
                     ...doc,
-                    metadata: {
-                        ...doc.metadata,
-                        source: metadataEntry.key, // remap the source back to the original s3 key
-                        lastModified: metadataEntry.lastModified
-                    }
+                    metadata: { ...doc.metadata, source: key } // remap the source back to the original s3 key
                 }
             })
 
             if (textSplitter) {
-                let splittedDocs = await textSplitter.splitDocuments(docs)
+                let splittedDocs: IDocument[] = []
+
+                splittedDocs = await splitDocsWithChunkInformation(docs, textSplitter)
+
                 docs = splittedDocs
             }
 
@@ -368,5 +290,61 @@ class S3_DocumentLoaders implements INode {
             throw new Error(`Failed to load data from bucket ${bucketName}: ${e.message}`)
         }
     }
+
+    /**
+     *  Get the mapping for the document loaders based on the file extension
+     *  Override this method to add more loaders or customize specific loaders
+     * @param pdfUsage - 'perPage' or 'perFile'
+     * @returns {LoadersMapping} - mapping of file extensions to document loaders
+     */
+    getLoaders(pdfUsage: string = 'perFile'): import('langchain/document_loaders/fs/directory').LoadersMapping {
+        return {
+            '.json': (path) => new JSONLoader(path),
+            '.txt': (path) => new TextLoader(path),
+            '.csv': (path) => new CSVLoader(path),
+            '.docx': (path) => new DocxLoader(path),
+            '.pdf': (path) =>
+                pdfUsage === 'perFile'
+                    ? // @ts-ignore
+                      new PDFLoader(path, { splitPages: false, pdfjs: () => import('pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js') })
+                    : // @ts-ignore
+                      new PDFLoader(path, { pdfjs: () => import('pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js') }),
+            '.aspx': (path) => new TextLoader(path), // ASPX
+            '.asp': (path) => new TextLoader(path), // ASP
+            '.cpp': (path) => new TextLoader(path), // C++
+            '.c': (path) => new TextLoader(path), // C
+            '.cs': (path) => new TextLoader(path), // C#
+            '.css': (path) => new TextLoader(path), // CSS
+            '.go': (path) => new TextLoader(path), // Go
+            '.h': (path) => new TextLoader(path), // C++ Header files
+            '.kt': (path) => new TextLoader(path), // Kotlin
+            '.java': (path) => new TextLoader(path), // Java
+            '.js': (path) => new TextLoader(path), // JavaScript
+            '.less': (path) => new TextLoader(path), // Less files
+            '.ts': (path) => new TextLoader(path), // TypeScript
+            '.php': (path) => new TextLoader(path), // PHP
+            '.proto': (path) => new TextLoader(path), // Protocol Buffers
+            '.python': (path) => new TextLoader(path), // Python
+            '.py': (path) => new TextLoader(path), // Python
+            '.rst': (path) => new TextLoader(path), // reStructuredText
+            '.ruby': (path) => new TextLoader(path), // Ruby
+            '.rb': (path) => new TextLoader(path), // Ruby
+            '.rs': (path) => new TextLoader(path), // Rust
+            '.scala': (path) => new TextLoader(path), // Scala
+            '.sc': (path) => new TextLoader(path), // Scala
+            '.scss': (path) => new TextLoader(path), // Sass
+            '.sol': (path) => new TextLoader(path), // Solidity
+            '.sql': (path) => new TextLoader(path), //SQL
+            '.swift': (path) => new TextLoader(path), // Swift
+            '.markdown': (path) => new TextLoader(path), // Markdown
+            '.md': (path) => new TextLoader(path), // Markdown
+            '.tex': (path) => new TextLoader(path), // LaTeX
+            '.ltx': (path) => new TextLoader(path), // LaTeX
+            '.html': (path) => new TextLoader(path), // HTML
+            '.vb': (path) => new TextLoader(path), // Visual Basic
+            '.xml': (path) => new TextLoader(path) // XML
+        }
+    }
 }
+
 module.exports = { nodeClass: S3_DocumentLoaders }
