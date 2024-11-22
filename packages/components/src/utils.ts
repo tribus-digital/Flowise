@@ -9,6 +9,8 @@ import { ICommonObject, IDatabaseEntity, IDocument, IMessage, INodeData, IVariab
 import { AES, enc } from 'crypto-js'
 import { AIMessage, HumanMessage, BaseMessage } from '@langchain/core/messages'
 import { getFileFromStorage } from './storageUtils'
+import { sha1 } from 'object-hash'
+import { TextSplitter } from 'langchain/text_splitter'
 
 export const numberOrExpressionRegex = '^(\\d+\\.?\\d*|{{.*}})$' //return true if string consists only numbers OR expression {{}}
 export const notEmptyRegex = '(.|\\s)*\\S(.|\\s)*' //return true if string is not empty or blank
@@ -998,4 +1000,73 @@ export const mapMimeTypeToExt = (mimeType: string) => {
 // remove invalid markdown image pattern: ![<some-string>](<some-string>)
 export const removeInvalidImageMarkdown = (output: string): string => {
     return typeof output === 'string' ? output.replace(/!\[.*?\]\((?!https?:\/\/).*?\)/g, '') : output
+}
+
+/**
+ *  Sanitize a web path to ensure it is safe to use as a filename or directory
+ * @param originalPath The original path to sanitize
+ * @returns  The sanitized path
+ */
+export const sanitizeWebPath = (originalPath: string): string => {
+    // Replace invalid characters with underscores
+    const sanitizedPath = originalPath.replace(/[^a-zA-Z0-9-_./]/g, '_')
+
+    // Use a hash of the original path to ensure uniqueness
+    const pathHash = sha1(originalPath).substring(0, 8)
+
+    // Split the sanitized path into directory parts and the filename
+    const directory = path.dirname(sanitizedPath)
+    const fileName = path.basename(sanitizedPath)
+
+    // Parse the filename to separate the name and extension
+    const parsedPath = path.parse(fileName)
+
+    // Insert the hash before the extension if it exists
+    const sanitizedFileName = parsedPath.ext ? `${parsedPath.name}_${pathHash}${parsedPath.ext}` : `${parsedPath.name}_${pathHash}`
+
+    // Reconstruct the full sanitized path
+    return path.join(directory, sanitizedFileName)
+}
+
+/**
+ * Spilt the supplied documents into chunks using the provided text splitter,
+ * adding chunk information (index and count) to the metadata
+ * @param docs
+ * @param textSplitter
+ * @returns A list of documents with chunk information in the metadata
+ */
+export const splitDocsWithChunkInformation = async (
+    docs: IDocument[],
+    textSplitter: TextSplitter
+): Promise<IDocument<Record<string, any>>[]> => {
+    let splittedDocs: IDocument[] = []
+    // split each doc one at a time, then add chunk info to metadata (chunk:{index, count}),
+    // and combine all the chunks into the final list of docs
+
+    for (let i = 0; i < docs.length; i++) {
+        const doc: IDocument = docs[i]
+
+        const chunks: string[] = await textSplitter.splitText(doc.pageContent)
+        const chunkCount = chunks.length
+
+        if (chunkCount === 1) {
+            splittedDocs.push(doc)
+        } else {
+            // update the metadata to include the chunk index and count
+            const chunkedDocs: IDocument[] = chunks.map((content, index) => ({
+                ...doc,
+                pageContent: content,
+                metadata: {
+                    ...doc.metadata,
+                    chunk: {
+                        i: index,
+                        n: chunkCount
+                    }
+                }
+            }))
+            splittedDocs = splittedDocs.concat(chunkedDocs)
+        }
+    }
+
+    return splittedDocs
 }
