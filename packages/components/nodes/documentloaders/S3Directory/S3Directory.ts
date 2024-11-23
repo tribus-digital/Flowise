@@ -1,5 +1,5 @@
 import { omit } from 'lodash'
-import { ICommonObject, IDocument, INode, INodeData, INodeOptionsValue, INodeParams } from '../../../src/Interface'
+import { ICommonObject, INode, INodeData, INodeOptionsValue, INodeParams } from '../../../src/Interface'
 import { getCredentialData, getCredentialParam, sanitizeWebPath, splitDocsWithChunkInformation } from '../../../src/utils'
 import { S3Client, GetObjectCommand, S3ClientConfig, ListObjectsV2Command, ListObjectsV2Output } from '@aws-sdk/client-s3'
 import { getRegions, MODEL_TYPE } from '../../../src/modelLoader'
@@ -242,11 +242,7 @@ class S3_DocumentLoaders implements INode {
             })
 
             if (textSplitter) {
-                let splittedDocs: IDocument[] = []
-
-                splittedDocs = await splitDocsWithChunkInformation(docs, textSplitter)
-
-                docs = splittedDocs
+                docs = await splitDocsWithChunkInformation(docs, textSplitter)
             }
 
             if (metadata) {
