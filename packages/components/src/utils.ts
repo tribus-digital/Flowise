@@ -1064,7 +1064,8 @@ export const splitDocsWithChunkInformation = async (
                     }
                 }
             }))
-            splittedDocs = splittedDocs.concat(chunkedDocs)
+
+            splittedDocs.push(...chunkedDocs)
         }
     }
 
