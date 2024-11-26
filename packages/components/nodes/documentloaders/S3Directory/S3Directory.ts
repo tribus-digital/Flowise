@@ -1,5 +1,5 @@
 import { omit } from 'lodash'
-import { ICommonObject, INode, INodeData, INodeOptionsValue, INodeParams } from '../../../src/Interface'
+import { ICommonObject, IDocument, INode, INodeData, INodeOptionsValue, INodeParams } from '../../../src/Interface'
 import { getCredentialData, getCredentialParam, sanitizeWebPath, splitDocsWithChunkInformation } from '../../../src/utils'
 import { S3Client, GetObjectCommand, S3ClientConfig, ListObjectsV2Command, ListObjectsV2Output } from '@aws-sdk/client-s3'
 import { getRegions, MODEL_TYPE } from '../../../src/modelLoader'
@@ -281,6 +281,8 @@ class S3_DocumentLoaders implements INode {
                 }
             })
 
+            docs = this.processDocuments(docs)
+
             if (textSplitter) {
                 docs = await splitDocsWithChunkInformation(docs, textSplitter)
             }
@@ -328,12 +330,22 @@ class S3_DocumentLoaders implements INode {
     }
 
     /**
+     * Process the loaded documents before splitting/chunking
+     * Allows for custom processing of the documents, such as filtering or modifying metadata, combining items, editing content, etc.
+     * @param docs
+     * @returns
+     */
+    protected processDocuments(docs: IDocument[]): IDocument[] {
+        return docs
+    }
+
+    /**
      *  Get the mapping for the document loaders based on the file extension
      *  Override this method to add more loaders or customize specific loaders
      * @param pdfUsage - 'perPage' or 'perFile'
      * @returns {LoadersMapping} - mapping of file extensions to document loaders
      */
-    getLoaders(pdfUsage: string = 'perFile'): import('langchain/document_loaders/fs/directory').LoadersMapping {
+    protected getLoaders(pdfUsage: string = 'perFile'): import('langchain/document_loaders/fs/directory').LoadersMapping {
         return {
             '.json': (path) => new JSONLoader(path),
             '.txt': (path) => new TextLoader(path),
