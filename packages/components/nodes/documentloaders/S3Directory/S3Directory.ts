@@ -80,6 +80,35 @@ class S3_DocumentLoaders implements INode {
                 optional: true
             },
             {
+                label: 'Filter',
+                name: 'fileFilter',
+                type: 'string',
+                description:
+                    'Limits the response to keys that match the specified filter. You can use * as a wildcard character, for example *.pdf and TestFolder/* Use commas to separate multiple filters',
+                default: '*', // default is all files
+                optional: true,
+                additionalParams: true
+            },
+            {
+                label: 'Filter Type',
+                name: 'filterType',
+                type: 'options',
+                description: 'Choose whether the filter should include or exclude the specified files',
+                options: [
+                    {
+                        label: 'Include',
+                        name: 'include'
+                    },
+                    {
+                        label: 'Exclude',
+                        name: 'exclude'
+                    }
+                ],
+                default: 'include',
+                optional: true,
+                additionalParams: true
+            },
+            {
                 label: 'Pdf Usage',
                 name: 'pdfUsage',
                 type: 'options',
@@ -129,6 +158,8 @@ class S3_DocumentLoaders implements INode {
         const textSplitter = nodeData.inputs?.textSplitter as TextSplitter
         const bucketName = nodeData.inputs?.bucketName as string
         const prefix = nodeData.inputs?.prefix as string
+        const fileFilter = nodeData.inputs?.fileFilter as string
+        const filterType = nodeData.inputs?.filterType as string
         const region = nodeData.inputs?.region as string
         const serverUrl = nodeData.inputs?.serverUrl as string
         const pdfUsage = nodeData.inputs?.pdfUsage
@@ -183,7 +214,16 @@ class S3_DocumentLoaders implements INode {
                 })
             )
 
-            const validItems = (listObjectsOutput?.Contents ?? []).filter((item) => item.Key && item.ETag)
+            const validItems = (listObjectsOutput?.Contents ?? [])
+                .filter((item) => item.Key && item.ETag)
+                .filter((item) => {
+                    if (!fileFilter || fileFilter === '*') return true
+
+                    const filters = fileFilter.split(',').map((filter) => filter.trim())
+                    const isMatch = filters.some((filter) => new RegExp(`^${filter.replace(/\*/g, '.*')}$`).test(item.Key!))
+
+                    return filterType === 'include' ? isMatch : !isMatch
+                })
 
             const keys: string[] = validItems.map((item) => item.Key!)
             const sanitizedKeys = keys.map(sanitizeWebPath)
