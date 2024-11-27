@@ -16,7 +16,7 @@ import { DocxLoader } from '@langchain/community/document_loaders/fs/docx'
 import { TextLoader } from 'langchain/document_loaders/fs/text'
 import { TextSplitter } from 'langchain/text_splitter'
 
-class S3_DocumentLoaders implements INode {
+class S3Directory implements INode {
     label: string
     name: string
     version: number
@@ -166,8 +166,6 @@ class S3_DocumentLoaders implements INode {
         const metadata = nodeData.inputs?.metadata
         const _omitMetadataKeys = nodeData.inputs?.omitMetadataKeys as string
 
-        const debug = process.env.DEBUG === 'true'
-
         let omitMetadataKeys: string[] = []
         if (_omitMetadataKeys) {
             omitMetadataKeys = _omitMetadataKeys.split(',').map((key) => key.trim())
@@ -281,7 +279,7 @@ class S3_DocumentLoaders implements INode {
                 }
             })
 
-            docs = this.processDocuments(docs)
+            docs = this.processDocuments(docs, nodeData, options)
 
             if (textSplitter) {
                 docs = await splitDocsWithChunkInformation(docs, textSplitter)
@@ -335,7 +333,7 @@ class S3_DocumentLoaders implements INode {
      * @param docs
      * @returns
      */
-    protected processDocuments(docs: IDocument[]): IDocument[] {
+    protected processDocuments(docs: IDocument[], nodeData: INodeData, options: ICommonObject): IDocument[] {
         return docs
     }
 
@@ -395,4 +393,4 @@ class S3_DocumentLoaders implements INode {
     }
 }
 
-module.exports = { nodeClass: S3_DocumentLoaders }
+module.exports = { nodeClass: S3Directory }
