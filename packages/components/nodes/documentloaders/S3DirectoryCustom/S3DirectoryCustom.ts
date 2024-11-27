@@ -24,9 +24,7 @@ class S3DirectoryCustom extends S3Directory {
         const debug = process.env.DEBUG === 'true'
 
         if (debug) {
-            options.logger.info(`Processing ${docs.length} documents...`)
-            options.logger.info(`[0] metadata ${docs[0].metadata}`)
-            options.logger.info(`[0] content ${docs[0].pageContent}`)
+            options.logger.info(`Processing ${docs.length} documents - combining metadata and content`)
         }
 
         const docsByKey: Record<string, IDocument> = {}
@@ -45,7 +43,9 @@ class S3DirectoryCustom extends S3Directory {
                 const contentKey = key.substring(0, key.length - 14)
                 // store the metadata mapped to the content key
                 const parsed = JSON.parse(doc.pageContent)
+                // if the metadata file contains a 'metadataAttributes' key, use that as the metadata
                 if (parsed['metadataAttributes']) metadataByKey[contentKey] = parsed['metadataAttributes']
+                // otherwise, store the entire parsed object as the metadata
                 else metadataByKey[contentKey] = parsed
             } else {
                 // it's a content file, store the document mapped to the content key
@@ -62,7 +62,7 @@ class S3DirectoryCustom extends S3Directory {
                 doc.metadata = { ...doc.metadata, ...metadata }
             } else {
                 if (debug) {
-                    options.logger.warning(`No metadata found for ${key}`)
+                    options.logger.info(`No metadata found for ${key}`)
                 }
             }
             newDocs.push(doc)
