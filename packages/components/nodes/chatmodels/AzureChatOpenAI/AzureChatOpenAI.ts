@@ -1,8 +1,8 @@
+import { AzureOpenAIInput, AzureChatOpenAI as LangchainAzureChatOpenAI, ChatOpenAIFields, OpenAIClient } from '@langchain/openai'
 import { BaseCache } from '@langchain/core/caches'
-import { AzureOpenAIInput, ChatOpenAIFields, AzureChatOpenAI as LangchainAzureChatOpenAI, OpenAIClient } from '@langchain/openai'
 import { ICommonObject, IMultiModalOption, INode, INodeData, INodeOptionsValue, INodeParams } from '../../../src/Interface'
-import { getModels, MODEL_TYPE } from '../../../src/modelLoader'
 import { getBaseClasses, getCredentialData, getCredentialParam } from '../../../src/utils'
+import { getModels, MODEL_TYPE } from '../../../src/modelLoader'
 import { AzureChatOpenAI } from './FlowiseAzureChatOpenAI'
 
 const serverCredentialsExists =
