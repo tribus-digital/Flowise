@@ -1,12 +1,12 @@
-import { TextSplitter } from 'langchain/text_splitter'
-import { omit } from 'lodash'
-import { test } from 'linkifyjs'
-import { parse } from 'css-what'
 import { load, SelectorType } from 'cheerio'
-import { webCrawl, xmlScrape } from '../../../src'
+import { parse } from 'css-what'
+import { TextSplitter } from 'langchain/text_splitter'
+import { test } from 'linkifyjs'
+import { omit } from 'lodash'
+import { handleEscapeCharacters, INodeOutputsValue, webCrawl, xmlScrape } from '../../../src'
 
-import { ICommonObject, IDocument, INode, INodeData, INodeParams } from '../../../src/Interface'
 import { integer } from '@opensearch-project/opensearch/api/types'
+import { ICommonObject, IDocument, INode, INodeData, INodeParams } from '../../../src/Interface'
 
 class Cheerio_DocumentLoaders implements INode {
     label: string
@@ -18,6 +18,7 @@ class Cheerio_DocumentLoaders implements INode {
     category: string
     baseClasses: string[]
     inputs: INodeParams[]
+    outputs: INodeOutputsValue[]
 
     constructor() {
         this.label = 'Cheerio Web Scraper'
@@ -109,6 +110,20 @@ class Cheerio_DocumentLoaders implements INode {
                 additionalParams: true
             }
         ]
+        this.outputs = [
+            {
+                label: 'Document',
+                name: 'document',
+                description: 'Array of document objects containing metadata and pageContent',
+                baseClasses: [...this.baseClasses, 'json']
+            },
+            {
+                label: 'Text',
+                name: 'text',
+                description: 'Concatenated string from pageContent of documents',
+                baseClasses: ['string', 'json']
+            }
+        ]
     }
 
     async init(nodeData: INodeData, _: string, options: ICommonObject): Promise<any> {
@@ -118,6 +133,7 @@ class Cheerio_DocumentLoaders implements INode {
         const selectedLinks = nodeData.inputs?.selectedLinks as string[]
         const rejectErrorResponses = nodeData.inputs?.rejectErrorResponses as boolean
         let limit = parseInt(nodeData.inputs?.limit as string)
+        const output = nodeData.outputs?.output as string
 
         const _omitMetadataKeys = nodeData.inputs?.omitMetadataKeys as string
 
@@ -302,7 +318,15 @@ class Cheerio_DocumentLoaders implements INode {
             for (const item of errorURLs) options.logger.info(`URL: ${item[0]}, status: ${item[1]}`)
         }
 
-        return docs
+        if (output === 'document') {
+            return docs
+        } else {
+            let finaltext = ''
+            for (const doc of docs) {
+                finaltext += `${doc.pageContent}\n`
+            }
+            return handleEscapeCharacters(finaltext, false)
+        }
     }
 }
 

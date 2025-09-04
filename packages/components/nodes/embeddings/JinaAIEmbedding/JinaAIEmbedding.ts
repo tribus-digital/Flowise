@@ -1,6 +1,6 @@
 import { ICommonObject, INode, INodeData, INodeParams } from '../../../src/Interface'
 import { getBaseClasses, getCredentialData, getCredentialParam } from '../../../src/utils'
-import { JinaEmbeddings, JinaEmbeddingsParams } from '@langchain/community/embeddings/jina'
+import { JinaEmbeddings } from '@langchain/community/embeddings/jina'
 
 class JinaAIEmbedding_Embeddings implements INode {
     label: string
@@ -17,7 +17,7 @@ class JinaAIEmbedding_Embeddings implements INode {
     constructor() {
         this.label = 'Jina Embeddings'
         this.name = 'jinaEmbeddings'
-        this.version = 1.0
+        this.version = 2.0
         this.type = 'JinaEmbeddings'
         this.icon = 'JinaAIEmbedding.svg'
         this.category = 'Embeddings'
@@ -36,21 +36,30 @@ class JinaAIEmbedding_Embeddings implements INode {
                 type: 'string',
                 default: 'jina-embeddings-v2-base-en',
                 description: 'Refer to <a href="https://jina.ai/embeddings/" target="_blank">JinaAI documentation</a> for available models'
+            },
+            {
+                label: 'Dimensions',
+                name: 'modelDimensions',
+                type: 'number',
+                default: 1024,
+                description:
+                    'Refer to <a href="https://jina.ai/embeddings/" target="_blank">JinaAI documentation</a> for available dimensions'
             }
         ]
     }
 
     async init(nodeData: INodeData, _: string, options: ICommonObject): Promise<any> {
         const modelName = nodeData.inputs?.modelName as string
+        const modelDimensions = nodeData.inputs?.modelDimensions as number
         const credentialData = await getCredentialData(nodeData.credential ?? '', options)
         const apiKey = getCredentialParam('jinaAIAPIKey', credentialData, nodeData)
 
-        const obj: JinaEmbeddingsParams = {
+        const model = new JinaEmbeddings({
             apiKey: apiKey,
-            model: modelName
-        }
+            model: modelName,
+            dimensions: modelDimensions
+        })
 
-        const model = new JinaEmbeddings(obj)
         return model
     }
 }
